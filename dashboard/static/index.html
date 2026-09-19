@@ -1095,6 +1095,236 @@
       </template>
     </section>
 
+    <!-- ============ PRODUCTION (LET'S WATCH) ============ -->
+    <section x-show="section==='production'" class="section">
+      <header class="section-head">
+        <h2>Production — Let's Watch</h2>
+        <p>Operate the gated production pipeline: rights and attribution, local source and caption import, original commentary, a disposable review draft, and an explicit human approval before the final export.</p>
+      </header>
+
+      <div class="grid two">
+        <div class="field">
+          <label>Project</label>
+          <select x-model="production.active" @change="productionOpen(production.active)">
+            <option value="">-- select --</option>
+            <template x-for="p in production.projects" :key="p">
+              <option :value="p" x-text="p"></option>
+            </template>
+          </select>
+        </div>
+        <div class="field">
+          <label>New project</label>
+          <div style="display:flex;gap:.5rem">
+            <input type="text" x-model="production.createId" placeholder="lets-watch-001" style="flex:1" />
+            <input type="text" x-model="production.createTitle" placeholder="title (optional)" style="flex:1" />
+            <button class="btn" :disabled="production.busy || !production.createId" @click="productionCreate()">Create</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="warn-banner" x-show="production.message" x-text="production.message"
+           style="border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.06); color:#fecaca;"></div>
+
+      <template x-if="production.data">
+        <div>
+          <div class="vts-status" :class="production.data.rights_complete ? 'on' : 'off'">
+            <span class="dot"></span>
+            <div class="vts-status-text">
+              <strong x-text="'Stage: ' + production.data.status"></strong>
+              <small x-text="production.data.rights_complete ? 'rights verified' : 'rights pending'"></small>
+            </div>
+          </div>
+
+          <div class="warn-banner" x-show="(production.data.blocked || []).length">
+            <b>Blocked actions</b>
+            <ul style="margin:.4rem 0 0 1rem">
+              <template x-for="b in production.data.blocked" :key="b.action + '|' + b.reason">
+                <li><b x-text="b.action"></b> — <span x-text="b.reason"></span></li>
+              </template>
+            </ul>
+          </div>
+
+          <h3 class="subhead">Rights &amp; attribution</h3>
+          <div class="grid two">
+            <div class="field">
+              <label>Acquisition basis</label>
+              <select x-model="production.rights.basis">
+                <option value="not_verified">not verified</option>
+                <option value="owned">owned</option>
+                <option value="permission_granted">permission granted</option>
+                <option value="license_permits_reuse">license permits reuse</option>
+                <option value="public_domain">public domain</option>
+                <option value="other_documented_basis">other documented basis</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Verifier (human)</label>
+              <input x-model="production.rights.verifier" placeholder="your name" />
+            </div>
+            <div class="field"><label>Creator</label><input x-model="production.rights.creator" /></div>
+            <div class="field"><label>Source title</label><input x-model="production.rights.title" /></div>
+            <div class="field"><label>Source URL</label><input x-model="production.rights.sourceUrl" /></div>
+            <div class="field"><label>Credit line <small class="hint">(derived when blank)</small></label><input x-model="production.rights.creditLine" /></div>
+            <div class="field"><label>License name</label><input x-model="production.rights.licenseName" /></div>
+            <div class="field"><label>License URL</label><input x-model="production.rights.licenseUrl" /></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn" :disabled="production.busy" @click="productionSaveRights(false)">Save rights</button>
+            <button class="btn primary" :disabled="production.busy" @click="productionSaveRights(true)">Save &amp; verify</button>
+          </div>
+          <template x-if="productionBlocked('verify_rights')">
+            <div class="hint" x-text="productionBlocked('verify_rights')"></div>
+          </template>
+
+          <div class="grid two">
+            <div class="field">
+              <label>Evidence reference (local path or URL)</label>
+              <input x-model="production.rights.evidenceRef" placeholder="metadata/evidence/permission.txt" />
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="btn" :disabled="production.busy || !production.rights.evidenceRef" @click="productionAddEvidenceRef()">Add evidence reference</button>
+            </div>
+            <div class="field">
+              <label>Attach evidence note (filename)</label>
+              <input x-model="production.rights.evidenceName" placeholder="permission.txt" />
+            </div>
+            <div class="field">
+              <label>Evidence note text</label>
+              <input x-model="production.rights.evidenceText" placeholder="who granted what, and when" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn" :disabled="production.busy || !production.rights.evidenceName || !production.rights.evidenceText" @click="productionAddEvidenceFile()">Attach evidence file</button>
+          </div>
+          <template x-if="(production.data.project.rights.evidence || []).length">
+            <div class="chips">
+              <template x-for="ref in production.data.project.rights.evidence" :key="ref">
+                <span class="chip ok" x-text="ref"></span>
+              </template>
+            </div>
+          </template>
+
+          <h3 class="subhead">Import local media &amp; captions</h3>
+          <div class="warn-banner" style="border-color: rgba(96,165,250,.4); background: rgba(96,165,250,.06); color:#c8dafc;">
+            Local files only. This workflow never downloads from a URL, bypasses DRM or access controls, or uploads anywhere.
+          </div>
+          <div class="grid two">
+            <div class="field">
+              <label>Local source media path</label>
+              <input x-model="production.sourcePath" placeholder="/path/to/clip.mp4" />
+            </div>
+            <div class="field">
+              <label>Source URL <small class="hint">(optional, recorded as provenance)</small></label>
+              <input x-model="production.sourceUrl" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn" :disabled="production.busy || !production.sourcePath || !!productionBlocked('import_source')" @click="productionImportSource()">Import source (copy into project)</button>
+            <span class="muted" x-show="productionBlocked('import_source')" x-text="productionBlocked('import_source')"></span>
+          </div>
+          <div class="grid two">
+            <div class="field">
+              <label>Local caption file (.srt / .vtt)</label>
+              <input x-model="production.captionPath" placeholder="/path/to/subs.srt" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn" :disabled="production.busy || !production.captionPath || !!productionBlocked('import_caption')" @click="productionImportCaption()">Import captions</button>
+            <span class="muted" x-show="productionBlocked('import_caption')" x-text="productionBlocked('import_caption')"></span>
+          </div>
+
+          <h3 class="subhead">Commentary</h3>
+          <div class="grid two">
+            <div class="field">
+              <label>Commentary language</label>
+              <div class="segmented">
+                <button :class="{on: production.mode==='ru'}" @click="production.mode='ru'">Russian</button>
+                <button :class="{on: production.mode==='en'}" @click="production.mode='en'">English</button>
+                <button :class="{on: production.mode==='bilingual'}" @click="production.mode='bilingual'">Bilingual</button>
+              </div>
+            </div>
+            <div class="field"><label>Style</label><input x-model="production.style" /></div>
+            <div class="field wide"><label>Persona <small class="hint">(optional)</small></label><input x-model="production.persona" /></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" :disabled="production.busy || !!productionBlocked('generate_commentary')" @click="productionGenerate()">Generate commentary + voice</button>
+            <span class="muted" x-show="productionBlocked('generate_commentary')" x-text="productionBlocked('generate_commentary')"></span>
+          </div>
+
+          <template x-if="production.data.transcript && (production.data.transcript.segments || []).length">
+            <details>
+              <summary class="subhead" x-text="'Transcript (' + production.data.transcript.segments.length + ' segments)'"></summary>
+              <ul class="thread-list">
+                <template x-for="(s, i) in production.data.transcript.segments" :key="i">
+                  <li><span x-text="s.start.toFixed(1) + '–' + s.end.toFixed(1) + 's'"></span> — <span x-text="s.text"></span></li>
+                </template>
+              </ul>
+            </details>
+          </template>
+
+          <template x-if="(production.data.moments || []).length">
+            <div>
+              <h3 class="subhead">Transcript moments</h3>
+              <ul class="thread-list">
+                <template x-for="(m, i) in production.data.moments" :key="i">
+                  <li>
+                    <b x-text="m.selected ? '✓ ' : ''"></b>
+                    <span x-text="m.source_start.toFixed(1) + '–' + m.source_end.toFixed(1) + 's'"></span> —
+                    <span x-text="m.source_excerpt"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+          <template x-if="(production.data.commentary || []).length">
+            <div>
+              <h3 class="subhead">Generated commentary</h3>
+              <ul class="thread-list">
+                <template x-for="(c, i) in production.data.commentary" :key="i">
+                  <li><b x-text="c.language"></b> — <span x-text="c.text"></span></li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+          <h3 class="subhead">Review draft</h3>
+          <div class="btn-row">
+            <button class="btn" :disabled="production.busy || !!productionBlocked('render_review')" @click="productionReview()">Render review draft</button>
+            <span class="muted" x-show="productionBlocked('render_review')" x-text="productionBlocked('render_review')"></span>
+          </div>
+          <template x-if="(production.data.review_outputs || []).length">
+            <div class="chips">
+              <template x-for="f in production.data.review_outputs" :key="f"><span class="chip" x-text="f"></span></template>
+            </div>
+          </template>
+
+          <h3 class="subhead">Human approval &amp; final export</h3>
+          <div class="grid two">
+            <div class="field"><label>Approver <small class="hint">(required)</small></label><input x-model="production.approver" placeholder="your name" /></div>
+            <div class="field"><label>Approval notes</label><input x-model="production.approveNotes" /></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" :disabled="production.busy || !production.approver || !!productionBlocked('approve')" @click="productionApprove()">Approve current edit</button>
+            <span class="muted" x-show="productionBlocked('approve')" x-text="productionBlocked('approve')"></span>
+          </div>
+          <template x-if="production.data.approval">
+            <div class="hint" x-text="'Approved by ' + production.data.approval.approver + ' at ' + production.data.approval.approved_at"></div>
+          </template>
+          <div class="btn-row">
+            <button class="btn primary" :disabled="production.busy || !!productionBlocked('export_final')" @click="productionExport()">Final export (gated)</button>
+            <span class="muted" x-show="productionBlocked('export_final')" x-text="productionBlocked('export_final')"></span>
+          </div>
+          <template x-if="(production.data.export_outputs || []).length">
+            <div class="chips">
+              <template x-for="f in production.data.export_outputs" :key="f"><span class="chip ok" x-text="f"></span></template>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
   </main>
 
   <!-- ============ LIVE DRAWER ============ -->

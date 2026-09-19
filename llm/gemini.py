@@ -51,7 +51,11 @@ class GeminiProvider(LLMProvider):
             try:
                 text = getattr(chunk, "text", None)
             except ValueError:
-                break
+                # A streamed chunk can carry only a finish reason or an internal
+                # "thought" part, so its ``.text`` accessor raises. That is not
+                # the end of the answer: skip the chunk and keep reading, or the
+                # visible text would be cut off mid-sentence.
+                continue
             if text:
                 yield text
 

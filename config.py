@@ -9,9 +9,15 @@ from typing import Any, Literal, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent
+
+# The app's own ignored credential file (``BASE_DIR/.env``) is authoritative:
+# a stale variable exported in the shell must not silently shadow the key the
+# operator saved via the dashboard/secrets store. ``secrets_store.set_secret``
+# writes this same file and reloads it with ``override=True``, so loading here
+# matches that behaviour.
+load_dotenv(BASE_DIR / ".env", override=True)
+
 PROFILES_DIR = BASE_DIR / "profiles"
 STATE_FILE = BASE_DIR / ".wallie_state.json"
 
@@ -142,7 +148,7 @@ class LLMConfig(BaseModel):
 
 
 class TTSConfig(BaseModel):
-    provider: Literal["fish", "elevenlabs", "piper", "kokoro"] = "fish"
+    provider: Literal["fish", "elevenlabs", "piper", "kokoro", "openrouter"] = "fish"
     voice_id: str = ""
     sample_rate: int = 24000
     # Output device for Wallie's voice. "" = system default. Accepts a device index
@@ -163,6 +169,16 @@ class TTSConfig(BaseModel):
     kokoro_voice: str = "af_heart"
     kokoro_lang_code: str = "a"
     kokoro_speed: float = 1.0
+    # OpenRouter (OpenAI-compatible POST https://openrouter.ai/api/v1/audio/speech).
+    # `model` must be an explicit speech model currently offered by OpenRouter — list
+    # them with GET /api/v1/models?output_modalities=speech and read the chosen model's
+    # `supported_voices`. No model is assumed. `voice_id` is that voice identifier
+    # (empty = let the endpoint use the model's default when it documents one).
+    # output_format: "pcm" streams 24 kHz mono PCM16 into Wallie's live player;
+    # "mp3" is the compressed alternative. speed is sent only when non-zero.
+    model: str = ""
+    output_format: str = "pcm"
+    speed: float = 0.0
 
 
 class VisionConfig(BaseModel):

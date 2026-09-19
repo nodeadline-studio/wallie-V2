@@ -63,4 +63,18 @@ def build_tts(cfg: TTSConfig, secrets: Secrets) -> TTSProvider:
             speed=cfg.kokoro_speed,
         )
 
+    if cfg.provider == "openrouter":
+        try:
+            from .openrouter import OpenRouterTTS
+        except ModuleNotFoundError as e:
+            raise _missing_pkg("openrouter", "httpx") from e
+        return OpenRouterTTS(
+            api_key=secrets.openrouter_api_key,
+            model=cfg.model,
+            voice_id=cfg.voice_id,
+            output_format=cfg.output_format,
+            sample_rate=cfg.sample_rate,
+            speed=cfg.speed,
+        )
+
     raise TTSError(f"Unknown TTS provider: {cfg.provider}")

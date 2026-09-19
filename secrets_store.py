@@ -24,7 +24,7 @@ SECRET_FIELDS: dict[str, dict[str, str]] = {
     "OPENROUTER_API_KEY": {
         "label": "OpenRouter", "kind": "llm",
         "url": "https://openrouter.ai/keys",
-        "hint": "starts with sk-or-…",
+        "hint": "starts with sk-or-… (also used by the openrouter TTS provider)",
     },
     "ANTHROPIC_API_KEY": {
         "label": "Anthropic (Claude)", "kind": "llm",

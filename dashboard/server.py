@@ -22,7 +22,6 @@ from starlette.responses import Response
 
 from audio.player import list_output_devices
 from config import (
-    BASE_DIR,
     AppConfig,
     Secrets,
     activate_profile,
@@ -34,28 +33,9 @@ from config import (
 )
 from core import Orchestrator, Persona
 from llm import build_provider
-
-# production/ has moved to the sibling lets-watch repo; it still imports
-# wallie-V2's shared tts/llm/imagegen infra, and this dashboard still hosts
-# its Stage 7 routes pending real extraction (see docs/overlay-host-v3-handoff.md
-# in lets-watch). Both repos are expected to be checked out as siblings on disk.
-_LETS_WATCH = Path(__file__).resolve().parent.parent.parent / "lets-watch"
-if _LETS_WATCH.is_dir() and str(_LETS_WATCH) not in sys.path:
-    sys.path.insert(0, str(_LETS_WATCH))
-
-from production.service import (
-    ProductionService,
-    SpeechProviderBlocker,
-)
-from production.workflow import (
-    ProductionWorkflow,
-    WorkflowBlocked,
-    WorkflowError,
-)
 from tts import build_tts
 
 STATIC_DIR = Path(__file__).parent / "static"
-PRODUCTION_ROOT = BASE_DIR / "projects"
 
 
 # -------------------------------------------------------------------
@@ -187,67 +167,6 @@ class TestProviderBody(BaseModel):
 
 class PinBody(BaseModel):
     pin: str
-
-
-# -------------------------------------------------------------------
-# Production workflow (Stage 7)
-# -------------------------------------------------------------------
-class ProductionProjectBody(BaseModel):
-    project_id: str
-    title: str = ""
-    source_url: str = ""
-    source_platform: str = "other"
-    source_language: str = "en"
-    commentary_language: str = "en"
-
-
-class ProductionRightsBody(BaseModel):
-    basis: str
-    evidence: Optional[list[str]] = None
-    notes: Optional[str] = None
-    verify: bool = False
-    verifier: str = ""
-    creator: str = ""
-    title: str = ""
-    source_url: str = ""
-    license_name: str = ""
-    license_url: str = ""
-    credit_line: str = ""
-    attribution_notes: str = ""
-
-
-class ProductionEvidenceBody(BaseModel):
-    name: str
-    content: str
-
-
-class ProductionPathBody(BaseModel):
-    path: str
-    source_url: str = ""
-    notes: str = ""
-
-
-class ProductionCommentaryBody(BaseModel):
-    mode: str = "en"
-    style: str = "reaction"
-    persona: str = ""
-    voice: str = ""
-    speech_model: str = ""
-    mp3_preview: bool = False
-
-
-class ProductionApproveBody(BaseModel):
-    approver: str
-    notes: str = ""
-
-
-def _production_workflow(project_id: str) -> ProductionWorkflow:
-    try:
-        return ProductionWorkflow.open(PRODUCTION_ROOT, project_id)
-    except FileNotFoundError:
-        raise HTTPException(404, f"project not found: {project_id!r}")
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
 
 
 def _build_app(
@@ -748,164 +667,6 @@ def _build_app(
             pass
         finally:
             state.clients.discard(ws)
-
-    # ---------- production workflow (Stage 7) ----------
-    def _production_action(work: ProductionWorkflow, func: Any) -> dict[str, Any]:
-        try:
-            func(work)
-        except SpeechProviderBlocker as exc:
-            raise HTTPException(409, exc.to_dict())
-        except WorkflowBlocked as exc:
-            raise HTTPException(409, exc.to_dict())
-        except WorkflowError as exc:
-            raise HTTPException(400, _scrub_error(str(exc)))
-        except (ValueError, OSError) as exc:
-            raise HTTPException(400, _scrub_error(str(exc)))
-        except Exception as exc:
-            raise HTTPException(500, _scrub_error(str(exc)))
-        return work.status()
-
-    @app.get("/api/production/projects")
-    def production_projects() -> dict[str, Any]:
-        return {"projects": ProductionWorkflow.list_projects(PRODUCTION_ROOT)}
-
-    @app.post("/api/production/projects")
-    def production_create(body: ProductionProjectBody) -> dict[str, Any]:
-        try:
-            ProductionWorkflow.create(
-                PRODUCTION_ROOT,
-                body.project_id,
-                title=body.title,
-                source_url=body.source_url,
-                source_platform=body.source_platform,
-                source_language=body.source_language,
-                commentary_language=body.commentary_language,
-            )
-        except ValueError as exc:
-            raise HTTPException(400, str(exc))
-        return _production_workflow(body.project_id).status()
-
-    @app.get("/api/production/projects/{project_id}")
-    def production_status(project_id: str) -> dict[str, Any]:
-        return _production_workflow(project_id).status()
-
-    @app.put("/api/production/projects/{project_id}/rights")
-    def production_rights(project_id: str, body: ProductionRightsBody) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-
-        def _apply(w: ProductionWorkflow) -> None:
-            if any(
-                value
-                for value in (
-                    body.creator,
-                    body.title,
-                    body.source_url,
-                    body.license_name,
-                    body.license_url,
-                    body.credit_line,
-                    body.attribution_notes,
-                )
-            ):
-                w.update_attribution(
-                    creator=body.creator,
-                    title=body.title,
-                    source_url=body.source_url,
-                    license_name=body.license_name,
-                    license_url=body.license_url,
-                    credit_line=body.credit_line,
-                    notes=body.attribution_notes,
-                )
-            w.update_rights(body.basis, evidence=body.evidence, notes=body.notes)
-            if body.verify:
-                w.verify_rights(verifier=body.verifier)
-
-        return _production_action(work, _apply)
-
-    @app.post("/api/production/projects/{project_id}/evidence")
-    def production_evidence(
-        project_id: str, body: ProductionEvidenceBody
-    ) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        return _production_action(
-            work, lambda w: w.store_evidence_file(body.name, body.content)
-        )
-
-    @app.post("/api/production/projects/{project_id}/source")
-    def production_source(project_id: str, body: ProductionPathBody) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        return _production_action(
-            work,
-            lambda w: w.import_source(
-                body.path, source_url=body.source_url, notes=body.notes
-            ),
-        )
-
-    @app.post("/api/production/projects/{project_id}/caption")
-    def production_caption(project_id: str, body: ProductionPathBody) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        return _production_action(
-            work,
-            lambda w: w.import_caption(
-                body.path, source_url=body.source_url, notes=body.notes
-            ),
-        )
-
-    @app.post("/api/production/projects/{project_id}/commentary")
-    def production_commentary(
-        project_id: str, body: ProductionCommentaryBody
-    ) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        cfg = load_profile()
-        service = ProductionService(
-            PRODUCTION_ROOT,
-            config=cfg,
-            secrets=Secrets(),
-            mp3_preview=body.mp3_preview,
-        )
-
-        def _apply(w: ProductionWorkflow) -> None:
-            w.set_language(body.mode)
-            service.produce(
-                project_id,
-                mode=body.mode,
-                style=body.style,
-                persona=body.persona,
-                voice=body.voice,
-                speech_model=body.speech_model,
-            )
-
-        return _production_action(work, _apply)
-
-    @app.post("/api/production/projects/{project_id}/review")
-    def production_review(project_id: str) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        service = ProductionService(
-            PRODUCTION_ROOT,
-            config=load_profile(),
-            secrets=Secrets(),
-            mp3_preview=True,
-        )
-        return _production_action(work, lambda w: service.render_review(project_id))
-
-    @app.post("/api/production/projects/{project_id}/approve")
-    def production_approve(
-        project_id: str, body: ProductionApproveBody
-    ) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        return _production_action(
-            work, lambda w: w.approve(body.approver, notes=body.notes)
-        )
-
-    @app.post("/api/production/projects/{project_id}/export")
-    def production_export(project_id: str) -> dict[str, Any]:
-        work = _production_workflow(project_id)
-        service = ProductionService(
-            PRODUCTION_ROOT,
-            config=load_profile(),
-            secrets=Secrets(),
-            mp3_preview=True,
-        )
-        return _production_action(work, lambda w: service.export_final(project_id))
 
     # ---------- static UI ----------
     if STATIC_DIR.exists():

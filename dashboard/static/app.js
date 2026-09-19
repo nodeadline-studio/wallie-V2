@@ -14,7 +14,6 @@ const SECTIONS = [
   { id: "avatar",      label: "Avatar",       ico: "🎴" },
   { id: "engine",      label: "Engine",       ico: "🧠" },
   { id: "secrets",     label: "API Keys",     ico: "🔑" },
-  { id: "production",  label: "Production",   ico: "🎬" },
 ];
 
 const HUMOR_OPTIONS = [
@@ -200,33 +199,12 @@ function app() {
     // First-run setup wizard (additive — reuses config/secrets/start APIs, breaks nothing).
     wizard: { open: false, step: 1, path: "", busy: false, keyDrafts: {}, keyMsg: {}, keyBusy: {} },
 
-    // Production workflow (Stage 7 "Let's Watch" pipeline).
-    production: {
-      projects: [],
-      active: "",
-      data: null,
-      busy: false,
-      message: "",
-      createId: "",
-      createTitle: "",
-      rights: {
-        basis: "not_verified", verifier: "",
-        creator: "", title: "", sourceUrl: "",
-        licenseName: "", licenseUrl: "", creditLine: "",
-        evidenceRef: "", evidenceName: "", evidenceText: "",
-      },
-      sourcePath: "", sourceUrl: "", captionPath: "",
-      mode: "en", style: "reaction", persona: "",
-      approver: "", approveNotes: "",
-    },
-
     async init() {
       await this.loadProfiles();
       await this.loadConfig();
       await this.refreshStatus();
       await this.loadSecrets();
       this.wizardMaybeOpen();
-      this.productionInit();
       this.connectWs();
       setInterval(() => this.refreshStatus(), 2000);
       setInterval(() => this.refreshAvatarStatus(), 3000);
@@ -686,202 +664,6 @@ function app() {
       this.wizard.busy = true;
       try { await this.save(); await this.start(); } finally { this.wizard.busy = false; }
       this.finishWizard();
-    },
-
-    // ---------- Production workflow (Stage 7) ----------
-    productionUrl(suffix) {
-      return `/api/production/projects/${encodeURIComponent(this.production.active)}${suffix}`;
-    },
-
-    async productionInit() {
-      await this.productionRefreshList();
-      if (this.production.projects.length && !this.production.active) {
-        await this.productionOpen(this.production.projects[0]);
-      }
-    },
-
-    async productionRefreshList() {
-      try {
-        const r = await fetch("/api/production/projects");
-        const d = await r.json();
-        this.production.projects = d.projects || [];
-      } catch (e) { console.warn("productionRefreshList:", e); }
-    },
-
-    async productionCreate() {
-      const id = (this.production.createId || "").trim();
-      if (!id) return;
-      this.production.busy = true;
-      this.production.message = "";
-      try {
-        const r = await fetch("/api/production/projects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project_id: id, title: this.production.createTitle || id }),
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-        this.production.active = id;
-        this.production.createId = "";
-        this.production.createTitle = "";
-        this.production.data = d;
-        this.productionLoadForm(d);
-        await this.productionRefreshList();
-      } catch (e) {
-        this.production.message = `error: ${e.message || e}`;
-      } finally {
-        this.production.busy = false;
-      }
-    },
-
-    async productionOpen(id) {
-      if (!id) return;
-      this.production.active = id;
-      this.production.busy = true;
-      this.production.message = "";
-      try {
-        const r = await fetch(`/api/production/projects/${encodeURIComponent(id)}`);
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-        this.production.data = d;
-        this.productionLoadForm(d);
-      } catch (e) {
-        this.production.message = `error: ${e.message || e}`;
-      } finally {
-        this.production.busy = false;
-      }
-    },
-
-    productionLoadForm(d) {
-      const project = d.project || {};
-      const rights = project.rights || {};
-      const attribution = project.attribution || {};
-      const f = this.production.rights;
-      f.basis = rights.basis || "not_verified";
-      f.verifier = rights.verifier || "";
-      f.creator = attribution.creator || "";
-      f.title = attribution.title || "";
-      f.sourceUrl = attribution.source_url || "";
-      f.licenseName = attribution.license_name || "";
-      f.licenseUrl = attribution.license_url || "";
-      f.creditLine = attribution.credit_line || "";
-      this.production.mode = d.commentary_mode || "en";
-    },
-
-    async productionRequest(path, options) {
-      this.production.busy = true;
-      this.production.message = "";
-      try {
-        const r = await fetch(path, options);
-        const d = await r.json();
-        if (!r.ok) {
-          const detail = d.detail;
-          const reason = typeof detail === "string" ? detail : (detail && detail.reason) || JSON.stringify(detail);
-          throw new Error(reason);
-        }
-        this.production.data = d;
-        this.productionLoadForm(d);
-        return d;
-      } catch (e) {
-        this.production.message = `blocked: ${e.message || e}`;
-        return null;
-      } finally {
-        this.production.busy = false;
-      }
-    },
-
-    productionBlocked(action) {
-      const blocked = (this.production.data && this.production.data.blocked) || [];
-      const hit = blocked.find((item) => item.action === action);
-      return hit ? hit.reason : "";
-    },
-
-    async productionSaveRights(verify) {
-      const f = this.production.rights;
-      const body = {
-        basis: f.basis, verify: !!verify, verifier: f.verifier,
-        creator: f.creator, title: f.title, source_url: f.sourceUrl,
-        license_name: f.licenseName, license_url: f.licenseUrl,
-        credit_line: f.creditLine,
-      };
-      await this.productionRequest(this.productionUrl("/rights"), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    },
-
-    async productionAddEvidenceRef() {
-      const ref = (this.production.rights.evidenceRef || "").trim();
-      if (!ref) return;
-      const existing = (this.production.data?.project?.rights?.evidence) || [];
-      const evidence = existing.includes(ref) ? existing : [...existing, ref];
-      const ok = await this.productionRequest(this.productionUrl("/rights"), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ basis: this.production.rights.basis, evidence }),
-      });
-      if (ok) this.production.rights.evidenceRef = "";
-    },
-
-    async productionAddEvidenceFile() {
-      const f = this.production.rights;
-      if (!f.evidenceName || !f.evidenceText) return;
-      const ok = await this.productionRequest(this.productionUrl("/evidence"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: f.evidenceName, content: f.evidenceText }),
-      });
-      if (ok) { f.evidenceName = ""; f.evidenceText = ""; }
-    },
-
-    async productionImportSource() {
-      if (!this.production.sourcePath) return;
-      const ok = await this.productionRequest(this.productionUrl("/source"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: this.production.sourcePath, source_url: this.production.sourceUrl }),
-      });
-      if (ok) this.production.sourcePath = "";
-    },
-
-    async productionImportCaption() {
-      if (!this.production.captionPath) return;
-      const ok = await this.productionRequest(this.productionUrl("/caption"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: this.production.captionPath }),
-      });
-      if (ok) this.production.captionPath = "";
-    },
-
-    async productionGenerate() {
-      await this.productionRequest(this.productionUrl("/commentary"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: this.production.mode,
-          style: this.production.style,
-          persona: this.production.persona,
-        }),
-      });
-    },
-
-    async productionReview() {
-      await this.productionRequest(this.productionUrl("/review"), { method: "POST" });
-    },
-
-    async productionApprove() {
-      if (!this.production.approver.trim()) return;
-      await this.productionRequest(this.productionUrl("/approve"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approver: this.production.approver, notes: this.production.approveNotes }),
-      });
-    },
-
-    async productionExport() {
-      await this.productionRequest(this.productionUrl("/export"), { method: "POST" });
     },
 
     formatHMS,

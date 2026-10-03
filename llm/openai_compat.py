@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any, AsyncIterator
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Mapping
 
+import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 
@@ -16,6 +18,55 @@ from .base import LLMError, LLMProvider
 _REQUEST_TIMEOUT_SEC = 25.0
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_SEC = 0.4
+
+_OPENROUTER_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/models"
+
+
+@dataclass(frozen=True)
+class TextModelInfo:
+    """One text model offered by a provider catalogue (``GET /models``)."""
+
+    id: str
+    supported_parameters: tuple[str, ...] = ()
+    context_length: int | None = None
+
+
+async def fetch_text_models(
+    api_key: str = "",
+    *,
+    endpoint: str = _OPENROUTER_MODELS_ENDPOINT,
+    timeout: float = 15.0,
+) -> list[TextModelInfo]:
+    """Read the provider's model catalogue (a free endpoint; never paid).
+
+    Used to validate an explicitly configured model before a paid run. The API
+    key is sent only as a bearer token and is never logged; a failure propagates
+    so callers can refuse to run without validation instead of guessing.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(endpoint, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(data, list):
+        raise LLMError("provider model catalogue did not contain a 'data' list")
+    models: list[TextModelInfo] = []
+    for item in data:
+        if not isinstance(item, Mapping):
+            continue
+        supported = item.get("supported_parameters") or ()
+        context_length = item.get("context_length")
+        models.append(
+            TextModelInfo(
+                id=str(item.get("id", "")),
+                supported_parameters=tuple(str(value) for value in supported),
+                context_length=(
+                    int(context_length) if context_length is not None else None
+                ),
+            )
+        )
+    return models
 
 
 class OpenAICompatProvider(LLMProvider):

@@ -13,6 +13,17 @@ Bearer token and is never logged.
 Because the sample rate of a raw PCM response is fixed by the endpoint's
 contract — not by caller configuration — :attr:`OpenRouterTTS.output_audio_format`
 reports the real format so a downstream writer never guesses.
+
+Performance direction is model-specific and never guessed. OpenRouter's
+documented request shape has no separate ``instructions`` field; for Google's
+Gemini TTS models the documented way to direct a performance is an English
+audio tag embedded in ``input`` (OpenRouter's own
+``google/gemini-3.1-flash-tts-preview`` request examples show ``"[calm] …"``,
+and Google's Gemini-TTS guide documents bracketed audio tags as non-spoken
+delivery modifiers). OpenAI's ``provider.options.openai.instructions`` is
+vendor-specific and is not assumed to work for Google. A directed request to a
+model without a documented mechanism is refused instead of being sent as
+spoken text.
 """
 from __future__ import annotations
 
@@ -37,9 +48,46 @@ _PCM_CONTRACT = AudioFormat(
 # decide explicitly rather than having another vendor substituted silently.
 PREFERRED_SPEECH_VENDOR = "elevenlabs"
 
+# Models whose documented OpenRouter request shape carries performance
+# direction as one English bracketed audio tag in ``input``.
+_DIRECTION_MODEL_PREFIX = "google/gemini"
+_DIRECTION_MODEL_MARKER = "tts"
+
 
 class ProviderSelectionError(TTSError):
     """A required speech model/voice could not be selected from the catalogue."""
+
+
+def supports_performance_direction(model: str) -> bool:
+    """Whether ``model`` has a documented direction mechanism on this endpoint.
+
+    Direction support is never inferred from a sibling vendor: only the Google
+    Gemini TTS family documents embedded audio tags for this endpoint.
+    """
+    identifier = (model or "").strip().lower()
+    return identifier.startswith(_DIRECTION_MODEL_PREFIX) and (
+        _DIRECTION_MODEL_MARKER in identifier
+    )
+
+
+def compose_directed_input(text: str, direction: str) -> str:
+    """Embed ``direction`` as one documented audio tag before the spoken text.
+
+    The tag is an instruction the model interprets; it is not spoken text.
+    Raises :class:`TTSError` when the direction cannot be expressed as a single
+    bracketed tag — it is never concatenated into the transcript as a fallback.
+    """
+    tag = " ".join((direction or "").split())
+    if not tag:
+        return text
+    if tag.startswith("[") and tag.endswith("]"):
+        tag = tag[1:-1].strip()
+    if not tag or "[" in tag or "]" in tag:
+        raise TTSError(
+            "openrouter: performance direction must be a single English phrase "
+            f"that fits in one audio tag: {direction!r}"
+        )
+    return f"[{tag}] {text}"
 
 
 @dataclass(frozen=True)
@@ -212,6 +260,13 @@ class OpenRouterTTS(TTSProvider):
         # cost (``GET /api/v1/generation?id=...``). Empty when the header is
         # absent, so a caller records "not reported" instead of guessing.
         self.last_generation_id = ""
+        # Whether a directed request can be expressed in this model's
+        # documented field; set per model, never per vendor.
+        self.supports_direction = supports_performance_direction(model)
+        # Provenance for the most recent request: the direction that was
+        # carried (empty when none) and the exact ``input`` field that was sent.
+        self.last_direction = ""
+        self.last_request_input = ""
 
     @property
     def output_audio_format(self) -> AudioFormat:
@@ -225,12 +280,25 @@ class OpenRouterTTS(TTSProvider):
             return _PCM_CONTRACT
         return AudioFormat(encoding=self._output_format)
 
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+    async def synthesize(
+        self, text: str, direction: str = ""
+    ) -> AsyncIterator[bytes]:
         if not text.strip():
             return
+        wire_input = text
+        if (direction or "").strip():
+            if not supports_performance_direction(self._model):
+                raise TTSError(
+                    "openrouter: performance direction is not supported for "
+                    f"model {self._model!r} on /audio/speech; the documented "
+                    "direction mechanism exists for Google Gemini TTS models "
+                    "(one English bracketed audio tag in 'input'). Refusing to "
+                    "send the direction as spoken text."
+                )
+            wire_input = compose_directed_input(text, direction)
         payload: dict = {
             "model": self._model,
-            "input": text,
+            "input": wire_input,
             "response_format": self._output_format,
         }
         if self._voice_id:
@@ -241,6 +309,8 @@ class OpenRouterTTS(TTSProvider):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        self.last_direction = str(direction or "")
+        self.last_request_input = wire_input
         try:
             async with self._client.stream(
                 "POST", _ENDPOINT, json=payload, headers=headers

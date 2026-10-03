@@ -147,6 +147,45 @@ class LLMConfig(BaseModel):
     ollama_keep_alive: str = "5m"
 
 
+class WriterConfig(BaseModel):
+    """Optional dedicated writing model (the production script stage).
+
+    This is a separate provider from ``llm``: the general-purpose model keeps
+    handling understanding/editorial/critique/translation, while this model
+    writes candidate reactions and the spoken draft. It is optional on purpose:
+    a profile without a ``writer`` block keeps its exact previous behaviour, and
+    an explicitly configured writer is never silently swapped for another model.
+    ``model`` is intentionally empty by default so nothing is assumed; set the
+    exact provider model id in the profile (or pass an explicit override).
+    """
+
+    provider: Literal["openai", "groq", "openrouter", "anthropic", "gemini", "ollama"] = "openrouter"
+    model: str = ""
+    temperature: float = 0.7
+    top_p: float = 0.95
+    max_tokens: int = 1200
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
+    # Bounded internal reasoning for providers/API shapes that accept it; 0 means
+    # "do not request reasoning". Passed only when the provider's stream()
+    # signature accepts a ``reasoning`` keyword (the shared OpenRouter adapter
+    # currently does not, so this is reported as unsupported rather than faked).
+    reasoning_max_tokens: int = 0
+    # Bounded writing: at most this many distinct candidate reactions, at most
+    # this many provider attempts per call, and at most this many calls per stage
+    # run (draft + compose = 2).
+    max_candidates: int = 4
+    max_attempts: int = 2
+    max_calls: int = 2
+    prompt_version: str = "writer-v1"
+    # A production-writing persona override, applied only while writing. It is
+    # never written back to the project preferences or the profile.
+    persona: str = ""
+    # Validate model availability and supported parameters against the provider
+    # catalogue before the first paid call.
+    validate_before_run: bool = True
+
+
 class TTSConfig(BaseModel):
     provider: Literal["fish", "elevenlabs", "piper", "kokoro", "openrouter"] = "fish"
     voice_id: str = ""
@@ -401,6 +440,10 @@ class AppConfig(BaseModel):
     profile_name: str = "default"
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    # Optional dedicated writing model. ``None`` (the default, and every legacy
+    # profile) means the script stage is unavailable and every existing path is
+    # unchanged; it never falls back to ``llm`` silently.
+    writer: Optional[WriterConfig] = None
     tts: TTSConfig = Field(default_factory=TTSConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     hearing: HearingConfig = Field(default_factory=HearingConfig)

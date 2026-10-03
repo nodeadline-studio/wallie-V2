@@ -59,8 +59,8 @@ def _install(monkeypatch, response):
     return client
 
 
-async def _collect(provider, text):
-    return [chunk async for chunk in provider.synthesize(text)]
+async def _collect(provider, text, direction=""):
+    return [chunk async for chunk in provider.synthesize(text, direction=direction)]
 
 
 def _provider(**kwargs):
@@ -158,6 +158,78 @@ def test_blank_text_makes_no_request(monkeypatch):
 
     assert chunks == []
     assert client.calls == []
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Performance direction (documented mechanism only)
+# ─────────────────────────────────────────────────────────────────────
+def test_direction_is_carried_as_a_documented_audio_tag(monkeypatch):
+    client = _install(monkeypatch, _FakeResponse(chunks=(b"aa",)))
+    provider = _provider(
+        model="google/gemini-3.1-flash-tts-preview", voice_id="Charon"
+    )
+    try:
+        assert provider.supports_direction is True
+        asyncio.run(
+            _collect(provider, "שלום", direction="deadpan, matter-of-fact")
+        )
+    finally:
+        asyncio.run(provider.aclose())
+
+    body = client.calls[0]["json"]
+    assert body["input"] == "[deadpan, matter-of-fact] שלום"
+    assert body["voice"] == "Charon"
+    assert provider.last_direction == "deadpan, matter-of-fact"
+    assert provider.last_request_input == body["input"]
+
+
+def test_bracketed_direction_is_normalized_to_one_tag(monkeypatch):
+    client = _install(monkeypatch, _FakeResponse(chunks=(b"aa",)))
+    provider = _provider(model="google/gemini-3.1-flash-tts-preview")
+    try:
+        asyncio.run(_collect(provider, "hello", direction="  [deadpan]  "))
+    finally:
+        asyncio.run(provider.aclose())
+
+    assert client.calls[0]["json"]["input"] == "[deadpan] hello"
+
+
+def test_direction_is_rejected_without_a_documented_mechanism(monkeypatch):
+    client = _install(monkeypatch, _FakeResponse(chunks=(b"aa",)))
+    provider = _provider()  # openai model: instructions are vendor-specific
+    try:
+        assert provider.supports_direction is False
+        with pytest.raises(TTSError, match="direction is not supported"):
+            asyncio.run(_collect(provider, "hello", direction="warm tone"))
+    finally:
+        asyncio.run(provider.aclose())
+
+    assert client.calls == []
+
+
+def test_direction_with_bracket_characters_is_rejected(monkeypatch):
+    client = _install(monkeypatch, _FakeResponse(chunks=(b"aa",)))
+    provider = _provider(model="google/gemini-3.1-flash-tts-preview")
+    try:
+        with pytest.raises(TTSError, match="single English phrase"):
+            asyncio.run(_collect(provider, "hello", direction="[deadpan] warm"))
+    finally:
+        asyncio.run(provider.aclose())
+
+    assert client.calls == []
+
+
+def test_no_direction_keeps_the_original_payload(monkeypatch):
+    client = _install(monkeypatch, _FakeResponse(chunks=(b"aa",)))
+    provider = _provider(model="google/gemini-3.1-flash-tts-preview")
+    try:
+        asyncio.run(_collect(provider, "hello"))
+    finally:
+        asyncio.run(provider.aclose())
+
+    assert client.calls[0]["json"]["input"] == "hello"
+    assert provider.last_direction == ""
+    assert provider.last_request_input == "hello"
 
 
 def test_generation_id_is_captured_from_the_response(monkeypatch):

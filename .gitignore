@@ -66,3 +66,6 @@ control/navigator.py
 control/pathfinder.py
 control/perception.py
 control/tracker.py
+
+# private persona profiles (canonical copy lives in the private lets-watch repo)
+profiles/hebrew-pilot.yaml
